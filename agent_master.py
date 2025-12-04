@@ -739,31 +739,15 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
 @mcp.tool()
 def get_previous_conversation() -> str:
     """
-    CRITICAL: Call this IMMEDIATELY at the start of EVERY conversation - before saying hello.
+    Call this at the start of every conversation to get context for continuity.
 
-    This is Dan's short-term memory. It gives you context from our last chat so you can:
-    - Hold Dan accountable for things he said he'd do
-    - Reference previous discussions naturally ("Last time you mentioned...")
-    - Maintain relationship continuity across sessions
+    Returns a summary of the last conversation including:
+    - When it happened
+    - Key discussion points
+    - Action items mentioned
+    - A snippet of the conversation
 
-    WHEN TO CALL THIS:
-    - FIRST THING when a conversation starts - no exceptions
-    - Before any greeting or response
-    - This should be your very first action
-
-    WHAT YOU'LL GET BACK:
-    - Timestamp of last conversation
-    - Dan's commitments and promises (HOLD HIM TO THESE)
-    - Action items he said he'd complete
-    - A snippet of what we discussed
-
-    HOW TO USE THE CONTEXT:
-    - If Dan committed to something, ask if he did it: "Hey Dan! Last time you said you'd call your mom - did that happen?"
-    - Reference previous topics naturally: "So how did that voice app feature turn out?"
-    - Notice patterns: If he keeps not doing something, call it out gently
-
-    IMPORTANT: If this returns "No previous conversation found", that's fine - it just means
-    this is the first conversation or the memory was reset. Proceed normally.
+    Use this to maintain continuity across sessions.
     """
     if not os.path.exists(LAST_CONVERSATION_FILE):
         return "No previous conversation found. This appears to be our first chat!"
