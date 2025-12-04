@@ -22,14 +22,18 @@ def restore_google_token():
     data_dir = os.environ.get("DATA_DIR", "/app/data")
     token_path = f"{data_dir}/google_token.pickle"
 
+    print(f"[Startup] Token restore - data_dir: {data_dir}, token_path: {token_path}")
+
     if token_b64 and not os.path.exists(token_path):
         try:
             os.makedirs(data_dir, exist_ok=True)
             with open(token_path, 'wb') as f:
                 f.write(base64.b64decode(token_b64))
-            print(f"[Startup] Restored Google token from environment variable")
+            print(f"[Startup] Restored Google token to {token_path}")
         except Exception as e:
             print(f"[Startup] Failed to restore Google token: {e}")
+    elif os.path.exists(token_path):
+        print(f"[Startup] Token already exists at {token_path}")
 
 restore_google_token()
 # Get allowed hosts from environment (for Railway/ngrok flexibility)
@@ -424,6 +428,9 @@ def get_tasks(label: str = None) -> str:
 def get_google_calendar_service():
     """Get authenticated Google Calendar service."""
     creds = None
+
+    print(f"[Calendar] Looking for token at: {GOOGLE_TOKEN_FILE}")
+    print(f"[Calendar] File exists: {os.path.exists(GOOGLE_TOKEN_FILE)}")
 
     # Load existing token
     if os.path.exists(GOOGLE_TOKEN_FILE):
