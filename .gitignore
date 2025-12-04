@@ -1,0 +1,33 @@
+# Environment variables (contains secrets)
+.env
+
+# Data files (contain personal info, will be in Railway volume)
+data/knowledge_graph.json
+data/google_token.pickle
+data/google_credentials.json
+data/recent_actions.json
+data/transcript_archive.json
+data/last_conversation.json
+
+# Keep the data directory structure
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

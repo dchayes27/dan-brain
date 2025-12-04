@@ -1,0 +1,10 @@
+mcp[cli]
+uvicorn
+starlette
+todoist-api-python
+pytz
+anthropic
+google-generativeai
+google-auth
+google-auth-oauthlib
+google-api-python-client

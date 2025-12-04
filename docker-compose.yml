@@ -1,0 +1,29 @@
+services:
+  # The Brain Service
+  dan-brain:
+    build: .
+    container_name: dan_brain_container
+    volumes:
+      # Map local ./data folder to container /app/data
+      # This ensures memory survives restarts!
+      - ./data:/app/data
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # The Tunnel Service (Ngrok)
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: ngrok_tunnel
+    command:
+      - "http"
+      - "--url=dan-brain.ngrok.app"
+      - "dan-brain:8000"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040" # Monitoring dashboard
+    depends_on:
+      - dan-brain
