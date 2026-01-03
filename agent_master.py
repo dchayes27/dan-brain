@@ -807,19 +807,18 @@ def get_previous_conversation() -> str:
 @mcp.tool()
 def detect_patterns(min_transcripts: int = 5) -> str:
     """
-    Analyze archived transcripts to detect behavioral patterns.
-    Only saves patterns that appear across multiple conversations.
+    Analyze conversation history to discover what ACTUALLY works with Dan.
+    Extracts psychological and behavioral patterns the agent can USE.
 
     Args:
-        min_transcripts: Minimum number of transcripts needed before analysis (default 5)
+        min_transcripts: Minimum conversations needed before analysis (default 5)
 
-    This tool looks for:
-    - Communication preferences (what approaches get action vs resistance)
-    - Work patterns (productive times, task types completed vs avoided)
-    - Motivation triggers (what gets Dan unstuck)
-    - Follow-through indicators (project types completed vs abandoned)
+    PURPOSE: Turn conversation data into actionable agent intelligence.
+    The patterns found here should directly inform HOW the agent talks to Dan,
+    WHEN to push vs back off, and WHAT approaches convert talk into action.
 
-    Only saves patterns observed in 2+ transcripts. Quality over quantity.
+    Patterns are saved to memory and automatically inform future conversations.
+    Only patterns observed 2+ times are saved — no speculation.
     """
     if not os.path.exists(TRANSCRIPT_ARCHIVE_FILE):
         return "No transcripts archived yet. Have more conversations first."
@@ -855,7 +854,9 @@ def detect_patterns(min_transcripts: int = 5) -> str:
     combined = "\n\n---\n\n".join(transcript_texts)
 
     try:
-        prompt = f"""Analyze these conversation transcripts between Dan and his AI assistant to identify RECURRING behavioral patterns.
+        prompt = f"""You are analyzing conversations between Dan and his AI assistant to extract ACTIONABLE PSYCHOLOGICAL PATTERNS.
+
+Your goal: Find what ACTUALLY WORKS to get Dan from talking to DOING.
 
 TRANSCRIPTS:
 {combined}
@@ -863,26 +864,53 @@ TRANSCRIPTS:
 EXISTING KNOWN PATTERNS (don't repeat these):
 {chr(10).join(existing_patterns[:20]) if existing_patterns else "None yet"}
 
-Find patterns that appear in AT LEAST 2 different conversations. Focus on:
-- Communication styles that work (direct vs gentle, questions vs statements)
-- Task/project types Dan follows through on vs avoids
-- Times/conditions when Dan is productive vs stuck
-- What approaches get action vs resistance
-- Motivation triggers that work
+Analyze for these specific pattern types:
+
+1. MOTIVATION TRIGGERS — What gets Dan energized and taking action?
+   - Topics/projects that spark immediate engagement vs ones he deflects
+   - Framing that works ("let's ship this" vs "we should plan this")
+   - External accountability cues that activate him
+
+2. RESISTANCE SIGNALS — What makes Dan shut down or avoid?
+   - How he deflects (changes subject, asks unrelated questions, gets meta)
+   - Topics or task types he consistently postpones
+   - Warning signs he's about to abandon something
+
+3. EFFECTIVE COMMUNICATION — What conversation approaches work?
+   - Direct vs gentle — which gets better response?
+   - Questions vs statements — what prompts action?
+   - When does humor help vs when does it derail?
+   - Does he respond better to challenge or support?
+
+4. ACTION CONVERSION — What turns conversation into completed tasks?
+   - What happens right before he actually does something?
+   - Breaking points where momentum dies
+   - Follow-up timing that works vs annoys
+
+5. ENERGY & STATE — When is he most/least productive?
+   - Time patterns (morning vs night, weekday vs weekend)
+   - Mood indicators that predict productive sessions
+   - Signs he needs to stop vs push through
 
 Return as JSON:
 {{
     "patterns": [
         {{
-            "observation": "specific pattern observed",
+            "type": "motivation|resistance|communication|action|energy",
+            "observation": "specific, actionable pattern observed",
             "evidence_count": number of conversations showing this,
-            "memory_format": "Dan [relation] [object]"
+            "agent_instruction": "how agent should USE this pattern",
+            "memory_format": "Dan [relation] [specific behavior/trigger]"
         }}
     ],
     "insufficient_data": ["patterns noticed once but need more evidence"]
 }}
 
-CRITICAL: Only include patterns with evidence_count >= 2. Be specific and actionable, not vague."""
+RULES:
+- Only include patterns with evidence_count >= 2
+- Be SPECIFIC — "responds well to direct challenges" not "likes directness"
+- The agent_instruction must be actionable — what should the agent DO differently?
+- Focus on patterns that convert to ACTION, not just preferences"""
 
         # Use Gemini for large context pattern analysis
         response = gemini_model.generate_content(prompt)
@@ -898,34 +926,36 @@ CRITICAL: Only include patterns with evidence_count >= 2. Be specific and action
         patterns = analysis.get("patterns", [])
         insufficient = analysis.get("insufficient_data", [])
 
-        # Save confirmed patterns to memory
+        # Save confirmed patterns to memory (with agent instructions)
         saved_count = 0
         for pattern in patterns:
             if pattern.get("evidence_count", 0) >= 2:
-                memory_format = pattern.get("memory_format", "")
-                if memory_format and memory_format not in existing_patterns:
-                    # Parse and save
-                    parts = memory_format.split(" ", 2)
-                    if len(parts) >= 3:
-                        subject = parts[0]
-                        # Find relation - everything between subject and last meaningful phrase
-                        rest = " ".join(parts[1:])
-                        # Simple heuristic: relation is first 2-4 words
-                        words = rest.split()
-                        if len(words) >= 2:
-                            relation = " ".join(words[:3])
-                            obj = " ".join(words[3:]) if len(words) > 3 else words[-1]
-                            result = add_memory(subject, relation, obj, "preferences")
-                            if "Stored" in result:
-                                saved_count += 1
+                observation = pattern.get("observation", "")
+                instruction = pattern.get("agent_instruction", "")
+                pattern_type = pattern.get("type", "other")
+                
+                if observation and observation not in existing_patterns:
+                    # Save as actionable pattern with instruction
+                    # Format: "Dan [pattern type] [observation] → [instruction]"
+                    relation = f"pattern ({pattern_type})"
+                    obj = observation
+                    if instruction:
+                        obj = f"{observation} → AGENT: {instruction}"
+                    
+                    result = add_memory("Dan", relation, obj, "preferences")
+                    if "Stored" in result:
+                        saved_count += 1
 
         # Format output
         output = [f"Pattern Analysis ({len(archive)} transcripts analyzed):"]
 
         if patterns:
-            output.append(f"\nCONFIRMED PATTERNS ({len(patterns)} found, {saved_count} new saved):")
+            output.append(f"\nACTIONABLE PATTERNS ({len(patterns)} found, {saved_count} new saved):")
             for p in patterns:
-                output.append(f"  • {p['observation']} (seen {p.get('evidence_count', '?')}x)")
+                ptype = p.get('type', '?')
+                output.append(f"\n  [{ptype.upper()}] {p.get('observation', '?')} (seen {p.get('evidence_count', '?')}x)")
+                if p.get('agent_instruction'):
+                    output.append(f"    → Agent should: {p['agent_instruction']}")
 
         if insufficient:
             output.append(f"\nNEED MORE EVIDENCE ({len(insufficient)} tentative):")
