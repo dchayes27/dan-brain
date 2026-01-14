@@ -137,6 +137,53 @@ MEMORY_CATEGORIES = [
     "other"         # Catch-all
 ]
 
+
+def _format_memory_age(created_at: str) -> str:
+    """Format how long ago a memory was created."""
+    if not created_at:
+        return ""
+
+    try:
+        tz = pytz.timezone("America/New_York")
+        now = datetime.now(tz)
+        created = datetime.fromisoformat(created_at)
+
+        # Make sure created is timezone-aware
+        if created.tzinfo is None:
+            created = tz.localize(created)
+
+        delta = now - created
+        days = delta.days
+        hours = delta.seconds // 3600
+
+        if days == 0:
+            if hours == 0:
+                return "(just now)"
+            elif hours == 1:
+                return "(1 hour ago)"
+            else:
+                return f"({hours} hours ago)"
+        elif days == 1:
+            return "(yesterday)"
+        elif days < 7:
+            return f"({days} days ago)"
+        elif days < 14:
+            return "(1 week ago)"
+        elif days < 30:
+            weeks = days // 7
+            return f"({weeks} weeks ago)"
+        elif days < 60:
+            return "(1 month ago)"
+        elif days < 365:
+            months = days // 30
+            return f"({months} months ago)"
+        else:
+            years = days // 365
+            return f"({years} year{'s' if years > 1 else ''} ago)"
+    except:
+        return ""
+
+
 @mcp.tool()
 def add_memory(subject: str, relation: str, object_entity: str, category: str = "other") -> str:
     """
@@ -182,11 +229,16 @@ def add_memory(subject: str, relation: str, object_entity: str, category: str = 
     else:
         category = category.lower()
 
+    # Add timestamp for context aging
+    tz = pytz.timezone("America/New_York")
+    timestamp = datetime.now(tz).isoformat()
+
     new_fact = {
         "s": subject,
         "r": relation,
         "o": object_entity,
-        "category": category
+        "category": category,
+        "created_at": timestamp
     }
 
     # Check for duplicates (ignore category in comparison)
@@ -242,7 +294,8 @@ def check_personal_context(topic: str = None, category: str = None) -> str:
             continue
 
         cat_tag = f"[{item_category}]" if item_category else ""
-        results.append(f"- {cat_tag} {item['s']} {item['r']} {item['o']}")
+        age_tag = _format_memory_age(item.get("created_at", ""))
+        results.append(f"- {cat_tag} {item['s']} {item['r']} {item['o']} {age_tag}".strip())
 
     if results:
         header = f"Found {len(results)} memories"
@@ -280,13 +333,14 @@ def list_all_memories() -> str:
     if not graph:
         return "No memories stored yet."
 
-    # Organize by category with indices
+    # Organize by category with indices and age
     by_category = {}
     for idx, item in enumerate(graph):
         cat = item.get("category", "other")
         if cat not in by_category:
             by_category[cat] = []
-        by_category[cat].append(f"  [{idx}] {item['s']} {item['r']} {item['o']}")
+        age_tag = _format_memory_age(item.get("created_at", ""))
+        by_category[cat].append(f"  [{idx}] {item['s']} {item['r']} {item['o']} {age_tag}".strip())
 
     # Format output
     output = [f"Dan's Knowledge Graph ({len(graph)} memories):"]
