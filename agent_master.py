@@ -102,6 +102,21 @@ LAST_CONVERSATION_FILE = f"{DATA_DIR}/last_conversation.json"
 # Last brainstorm session (separate from task-based conversations)
 LAST_BRAINSTORM_FILE = f"{DATA_DIR}/last_brainstorm.json"
 
+# Brainstorm Knowledge Base - persistent storage for insights, ideas, questions
+KNOWLEDGE_BASE_FILE = f"{DATA_DIR}/brainstorm_knowledge_base.json"
+
+# Categories for organizing knowledge base items
+INSIGHT_CATEGORIES = [
+    "self",           # Personal insights about Dan (values, patterns, identity)
+    "work",           # Professional/career insights
+    "relationships",  # Interpersonal insights
+    "creativity",     # Creative process, ideas, artistic
+    "systems",        # How things work, mental models
+    "goals",          # Aspirations, directions, priorities
+    "patterns",       # Recurring themes, behaviors
+    "uncategorized"   # Default
+]
+
 # --- AGENT TYPE CONFIGURATION ---
 # Brainstorm agents: focus on ideas, exploration, reflection (no task creation)
 # Task agents: focus on action items, commitments, accountability
@@ -111,6 +126,282 @@ TASK_AGENTS = ["Zara", "Vic"]  # Existing task-focused agents
 def is_brainstorm_agent(agent_name: str) -> bool:
     """Check if an agent is configured for brainstorm mode."""
     return agent_name in BRAINSTORM_AGENTS
+
+
+# --- KNOWLEDGE BASE HELPERS ---
+
+import uuid
+
+def _load_knowledge_base() -> dict:
+    """Load the knowledge base or create empty structure."""
+    if os.path.exists(KNOWLEDGE_BASE_FILE):
+        try:
+            with open(KNOWLEDGE_BASE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+
+    return {
+        "version": 1,
+        "last_updated": datetime.now(pytz.timezone("America/New_York")).isoformat(),
+        "insights": [],
+        "ideas": [],
+        "questions": [],
+        "connections": [],
+        "sessions": []
+    }
+
+
+def _save_knowledge_base(kb: dict) -> None:
+    """Save the knowledge base to disk."""
+    kb["last_updated"] = datetime.now(pytz.timezone("America/New_York")).isoformat()
+    os.makedirs(os.path.dirname(KNOWLEDGE_BASE_FILE), exist_ok=True)
+    with open(KNOWLEDGE_BASE_FILE, 'w') as f:
+        json.dump(kb, f, indent=2)
+
+
+def _check_semantic_duplicate(new_item: str, existing_items: list, item_type: str = "insight") -> dict:
+    """
+    Check if a new item is semantically similar to existing items.
+    Uses Gemini for semantic comparison.
+
+    Returns: {"is_duplicate": bool, "similar_id": str or None, "similarity": float}
+    """
+    if not existing_items or not new_item:
+        return {"is_duplicate": False, "similar_id": None, "similarity": 0.0}
+
+    # Limit comparison to most recent 30 items to avoid context overflow
+    items_to_check = existing_items[-30:]
+    items_text = "\n".join([f"[{item['id']}] {item['content']}" for item in items_to_check])
+
+    prompt = f"""Compare this NEW {item_type} to the EXISTING {item_type}s below.
+
+NEW {item_type.upper()}:
+{new_item}
+
+EXISTING {item_type.upper()}S:
+{items_text}
+
+Return JSON only (no markdown):
+{{
+    "is_duplicate": true if NEW means essentially the same as any EXISTING item,
+    "most_similar_id": "id of most similar existing item" or null,
+    "similarity_score": 0.0 to 1.0 (1.0 = identical meaning)
+}}
+
+A score >= 0.8 means duplicate. Be conservative - similar themes aren't duplicates unless same core meaning."""
+
+    try:
+        response = gemini_model.generate_content(prompt)
+        result_text = response.text
+
+        import re
+        json_match = re.search(r'\{[\s\S]*?\}', result_text)
+        if json_match:
+            result = json.loads(json_match.group())
+            return {
+                "is_duplicate": result.get("is_duplicate", False),
+                "similar_id": result.get("most_similar_id"),
+                "similarity": result.get("similarity_score", 0.0)
+            }
+    except Exception as e:
+        print(f"[KnowledgeBase] Dedup error: {e}")
+
+    return {"is_duplicate": False, "similar_id": None, "similarity": 0.0}
+
+
+def _categorize_insight(content: str) -> str:
+    """Use Gemini to categorize an insight into one of INSIGHT_CATEGORIES."""
+    prompt = f"""Categorize this insight into ONE of these categories:
+- self (personal insights about identity, values, patterns)
+- work (professional/career)
+- relationships (interpersonal)
+- creativity (creative process, artistic)
+- systems (how things work, mental models)
+- goals (aspirations, priorities)
+- patterns (recurring themes, behaviors)
+- uncategorized (if unclear)
+
+INSIGHT: {content}
+
+Return only the category name, nothing else."""
+
+    try:
+        response = gemini_model.generate_content(prompt)
+        category = response.text.strip().lower()
+        if category in INSIGHT_CATEGORIES:
+            return category
+    except:
+        pass
+
+    return "uncategorized"
+
+
+def add_to_knowledge_base(
+    item_type: str,
+    content: str,
+    session_id: str = None,
+    category: str = None,
+    starred: bool = False,
+    status: str = None,
+    notes: str = None
+) -> dict:
+    """
+    Add an insight, idea, or question to the knowledge base.
+    Checks for duplicates and merges if similar.
+
+    Args:
+        item_type: "insight" | "idea" | "question" | "connection"
+        content: The text content
+        session_id: Which brainstorm session this came from
+        category: One of INSIGHT_CATEGORIES (auto-detected if not provided)
+        starred: Mark as important
+        status: For ideas: "explored" | "parked" | "needs_more" | "implemented"
+        notes: Additional context (for ideas)
+
+    Returns: {"action": "added" | "merged" | "skipped", "id": str, "message": str}
+    """
+    kb = _load_knowledge_base()
+    tz = pytz.timezone("America/New_York")
+    timestamp = datetime.now(tz).isoformat()
+
+    # Determine which list to use
+    if item_type == "insight":
+        items_list = kb["insights"]
+    elif item_type == "idea":
+        items_list = kb["ideas"]
+    elif item_type == "question":
+        items_list = kb["questions"]
+    elif item_type == "connection":
+        items_list = kb["connections"]
+    else:
+        return {"action": "skipped", "id": None, "message": f"Unknown item type: {item_type}"}
+
+    # Check for duplicates
+    dedup_result = _check_semantic_duplicate(content, items_list, item_type)
+
+    if dedup_result["is_duplicate"] and dedup_result["similar_id"]:
+        # Merge: add session to existing item, possibly upgrade starred
+        for item in items_list:
+            if item["id"] == dedup_result["similar_id"]:
+                if session_id and session_id not in item.get("source_sessions", []):
+                    item.setdefault("source_sessions", []).append(session_id)
+                if starred:
+                    item["starred"] = True
+                item["updated_at"] = timestamp
+                item["confidence"] = max(item.get("confidence", 0.5), dedup_result["similarity"])
+                _save_knowledge_base(kb)
+                return {
+                    "action": "merged",
+                    "id": item["id"],
+                    "message": f"Merged with existing {item_type} (similarity: {dedup_result['similarity']:.2f})"
+                }
+
+    # Auto-categorize if not provided (for insights, ideas, questions)
+    if not category and item_type in ["insight", "idea", "question"]:
+        category = _categorize_insight(content)
+
+    # Create new item
+    new_id = str(uuid.uuid4())[:8]
+    new_item = {
+        "id": new_id,
+        "content": content,
+        "category": category or "uncategorized",
+        "starred": starred,
+        "source_sessions": [session_id] if session_id else [],
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "confidence": 1.0
+    }
+
+    # Add type-specific fields
+    if item_type == "idea":
+        new_item["status"] = status or "explored"
+        new_item["notes"] = notes
+    elif item_type == "question":
+        new_item["status"] = "open"
+        new_item["answer"] = None
+    elif item_type == "connection":
+        new_item["links"] = []
+
+    items_list.append(new_item)
+    _save_knowledge_base(kb)
+
+    return {
+        "action": "added",
+        "id": new_id,
+        "message": f"Added new {item_type} [{category}]"
+    }
+
+
+def get_knowledge_base(
+    category: str = None,
+    starred_only: bool = False,
+    item_type: str = None
+) -> dict:
+    """
+    Retrieve items from the knowledge base.
+
+    Args:
+        category: Filter by category
+        starred_only: Only return starred items
+        item_type: Filter by type ("insight", "idea", "question", "connection")
+
+    Returns: Full knowledge base structure with optional filtering
+    """
+    kb = _load_knowledge_base()
+
+    def filter_items(items):
+        result = items
+        if category:
+            result = [i for i in result if i.get("category") == category]
+        if starred_only:
+            result = [i for i in result if i.get("starred")]
+        return result
+
+    if item_type:
+        if item_type == "insight":
+            return {"insights": filter_items(kb["insights"])}
+        elif item_type == "idea":
+            return {"ideas": filter_items(kb["ideas"])}
+        elif item_type == "question":
+            return {"questions": filter_items(kb["questions"])}
+        elif item_type == "connection":
+            return {"connections": filter_items(kb["connections"])}
+
+    return {
+        "version": kb["version"],
+        "last_updated": kb["last_updated"],
+        "insights": filter_items(kb["insights"]),
+        "ideas": filter_items(kb["ideas"]),
+        "questions": filter_items(kb["questions"]),
+        "connections": filter_items(kb["connections"]),
+        "sessions": kb["sessions"]
+    }
+
+
+def star_knowledge_item(item_id: str, item_type: str, starred: bool = True) -> dict:
+    """Toggle starred status on a knowledge base item."""
+    kb = _load_knowledge_base()
+
+    if item_type == "insight":
+        items_list = kb["insights"]
+    elif item_type == "idea":
+        items_list = kb["ideas"]
+    elif item_type == "question":
+        items_list = kb["questions"]
+    else:
+        return {"success": False, "message": f"Unknown item type: {item_type}"}
+
+    for item in items_list:
+        if item["id"] == item_id:
+            item["starred"] = starred
+            item["updated_at"] = datetime.now(pytz.timezone("America/New_York")).isoformat()
+            _save_knowledge_base(kb)
+            return {"success": True, "message": f"Updated starred status to {starred}"}
+
+    return {"success": False, "message": f"Item not found: {item_id}"}
+
 
 # --- TOOL 1: TIME (The Grounding) ---
 @mcp.tool()
@@ -738,6 +1029,72 @@ Guidelines:
             "connections_made": [],
             "synthesis": "Could not process this conversation."
         }
+
+    # --- AUTO-ADD TO KNOWLEDGE BASE ---
+    session_id = str(uuid.uuid4())[:8]
+    kb_stats = {"added": 0, "merged": 0}
+
+    # Add insights
+    for insight in extracted.get("key_insights", []):
+        if insight and len(insight) > 10:
+            result = add_to_knowledge_base("insight", insight, session_id=session_id)
+            if result["action"] == "added":
+                kb_stats["added"] += 1
+            elif result["action"] == "merged":
+                kb_stats["merged"] += 1
+
+    # Add ideas
+    for idea_obj in extracted.get("ideas_explored", []):
+        idea_text = idea_obj.get("idea", "") if isinstance(idea_obj, dict) else str(idea_obj)
+        status = idea_obj.get("status", "explored") if isinstance(idea_obj, dict) else "explored"
+        notes = idea_obj.get("notes") if isinstance(idea_obj, dict) else None
+        if idea_text and len(idea_text) > 10:
+            result = add_to_knowledge_base(
+                "idea", idea_text,
+                session_id=session_id,
+                status=status,
+                notes=notes
+            )
+            if result["action"] == "added":
+                kb_stats["added"] += 1
+            elif result["action"] == "merged":
+                kb_stats["merged"] += 1
+
+    # Add questions
+    for question in extracted.get("questions_raised", []):
+        if question and len(question) > 10:
+            result = add_to_knowledge_base("question", question, session_id=session_id)
+            if result["action"] == "added":
+                kb_stats["added"] += 1
+            elif result["action"] == "merged":
+                kb_stats["merged"] += 1
+
+    # Add connections
+    for connection in extracted.get("connections_made", []):
+        if connection and len(connection) > 10:
+            result = add_to_knowledge_base("connection", connection, session_id=session_id)
+            if result["action"] == "added":
+                kb_stats["added"] += 1
+            elif result["action"] == "merged":
+                kb_stats["merged"] += 1
+
+    # Record session in knowledge base
+    kb = _load_knowledge_base()
+    kb["sessions"].append({
+        "id": session_id,
+        "timestamp": datetime.now(pytz.timezone("America/New_York")).isoformat(),
+        "agent_name": agent_name,
+        "synthesis": extracted.get("synthesis", ""),
+        "insight_count": len(extracted.get("key_insights", [])),
+        "idea_count": len(extracted.get("ideas_explored", []))
+    })
+    # Keep last 50 sessions
+    kb["sessions"] = kb["sessions"][-50:]
+    _save_knowledge_base(kb)
+
+    print(f"[KnowledgeBase] Session {session_id}: {kb_stats['added']} added, {kb_stats['merged']} merged")
+    extracted["_kb_session_id"] = session_id
+    extracted["_kb_stats"] = kb_stats
 
     return extracted
 
@@ -1483,6 +1840,58 @@ async def api_get_last_brainstorm(request: Request):
         }, status_code=500)
 
 
+async def api_get_knowledge_base(request: Request):
+    """GET /api/knowledge-base - Returns full knowledge base for iOS."""
+    try:
+        # Parse query params for filtering
+        category = request.query_params.get("category")
+        starred_only = request.query_params.get("starred_only", "").lower() == "true"
+        item_type = request.query_params.get("item_type")
+
+        kb = get_knowledge_base(
+            category=category,
+            starred_only=starred_only,
+            item_type=item_type
+        )
+
+        return JSONResponse({
+            "success": True,
+            "data": kb
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def api_star_knowledge_item(request: Request):
+    """POST /api/knowledge-base/star - Toggle starred status on an item."""
+    try:
+        body = await request.json()
+        item_id = body.get("item_id")
+        item_type = body.get("item_type")
+        starred = body.get("starred", True)
+
+        if not item_id or not item_type:
+            return JSONResponse({
+                "success": False,
+                "error": "Missing item_id or item_type"
+            }, status_code=400)
+
+        result = star_knowledge_item(item_id, item_type, starred)
+
+        return JSONResponse({
+            "success": result["success"],
+            "message": result["message"]
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
 # --- SERVER ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
@@ -1498,6 +1907,8 @@ if __name__ == "__main__":
     mcp_app.routes.insert(0, Route("/api/health", api_health, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/last-conversation", api_get_last_conversation, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/last-brainstorm", api_get_last_brainstorm, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/knowledge-base", api_get_knowledge_base, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/knowledge-base/star", api_star_knowledge_item, methods=["POST"]))
 
     # Run with uvicorn
     uvicorn.run(mcp_app, host="0.0.0.0", port=8000)
