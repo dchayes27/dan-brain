@@ -1889,6 +1889,36 @@ def get_rest_of_day() -> str:
     output = [f"REST OF YOUR DAY - {now.strftime('%A, %B %d')}"]
     output.append("=" * 40)
 
+    # --- BEHAVIORAL PATTERNS (what works with Dan) ---
+    output.append("\n🧠 REMEMBER ABOUT DAN:")
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, 'r') as f:
+                graph = json.load(f)
+
+            # Find patterns (stored with "pattern" in relation)
+            patterns = [
+                m for m in graph
+                if 'pattern' in m.get('r', '').lower() or m.get('category') == 'patterns'
+            ]
+
+            if patterns:
+                for p in patterns[-5:]:  # Show last 5 patterns
+                    # Extract just the actionable part
+                    obj = p.get('o', '')
+                    # If it has "→ AGENT:" format, show that
+                    if '→ AGENT:' in obj:
+                        instruction = obj.split('→ AGENT:')[1].strip()
+                        output.append(f"  • {instruction}")
+                    else:
+                        output.append(f"  • {obj}")
+            else:
+                output.append("  (No patterns learned yet - have more conversations)")
+        except:
+            output.append("  (Error reading patterns)")
+    else:
+        output.append("  (No patterns learned yet)")
+
     # --- CALENDAR EVENTS ---
     output.append("\n📅 SCHEDULED:")
     service = get_google_calendar_service()
