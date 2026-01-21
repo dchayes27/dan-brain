@@ -13,6 +13,7 @@ from google.auth.transport.requests import Request as GoogleAuthRequest
 from googleapiclient.discovery import build
 import pickle
 import base64
+import requests
 
 # --- INITIALIZATION ---
 
@@ -77,6 +78,10 @@ claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 # Initialize Gemini client (primary for large context)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
 gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+
+# Search API keys
+CONTEXT7_API_KEY = os.environ.get("CONTEXT7_API_KEY", "")
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 
 # Persistent data path (configurable for Railway vs local Docker)
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
@@ -464,6 +469,167 @@ def get_current_time() -> str:
     tz = pytz.timezone("America/New_York")
     now = datetime.now(tz)
     return now.strftime("%A, %B %d, %Y at %I:%M %p (%Z)")
+
+
+# --- SEARCH TOOLS ---
+
+@mcp.tool()
+def search_documentation(query: str, library: str = None) -> str:
+    """
+    Search documentation for libraries, frameworks, and APIs using Context7.
+    Use this when Dan needs to know HOW to use something he's already chosen.
+
+    Args:
+        query: What you're trying to learn or do (e.g., "create agent with knowledge base")
+        library: Optional - specific library name (e.g., "elevenlabs", "nextjs", "react")
+
+    Returns:
+        Relevant documentation with code examples
+
+    Examples:
+        - "How do I create an agent?" + library="elevenlabs" -> ElevenLabs agent docs
+        - "useEffect cleanup" + library="react" -> React hooks documentation
+        - "authentication setup" + library="nextauth" -> NextAuth docs
+    """
+    if not CONTEXT7_API_KEY:
+        return "Error: CONTEXT7_API_KEY not configured"
+
+    headers = {"Authorization": f"Bearer {CONTEXT7_API_KEY}"}
+    base_url = "https://context7.com/api/v2"
+
+    try:
+        # Step 1: Search for the library if provided, otherwise try to extract from query
+        search_library = library or query.split()[0]  # Fallback: use first word of query
+
+        search_response = requests.get(
+            f"{base_url}/libs/search",
+            headers=headers,
+            params={"libraryName": search_library, "query": query},
+            timeout=10
+        )
+
+        if search_response.status_code != 200:
+            return f"Error searching for library: {search_response.status_code} - {search_response.text}"
+
+        response_data = search_response.json()
+        libraries = response_data.get("results", []) if isinstance(response_data, dict) else response_data
+
+        if not libraries:
+            return f"No documentation found for '{search_library}'. Try search_web for general information."
+
+        # Use the best match
+        best_match = libraries[0]
+        library_id = best_match.get("id")
+
+        # Step 2: Get documentation context
+        context_response = requests.get(
+            f"{base_url}/context",
+            headers=headers,
+            params={"libraryId": library_id, "query": query, "type": "txt"},
+            timeout=15
+        )
+
+        if context_response.status_code != 200:
+            return f"Error fetching documentation: {context_response.status_code}"
+
+        docs = context_response.text
+
+        if not docs or len(docs.strip()) < 50:
+            return f"Limited documentation found for '{query}' in {best_match.get('name', search_library)}. Try rephrasing or use search_web."
+
+        # Format response
+        return f"""## Documentation: {best_match.get('name', search_library)}
+
+{docs}
+
+---
+Source: Context7 ({library_id})"""
+
+    except requests.Timeout:
+        return "Documentation search timed out. Please try again."
+    except Exception as e:
+        return f"Error searching documentation: {str(e)}"
+
+
+@mcp.tool()
+def search_web(query: str) -> str:
+    """
+    Search the web for reviews, opinions, comparisons, and current information using Perplexity.
+    Returns a synthesized answer with citations - not just links.
+
+    Use this when Dan needs to:
+    - Know if something is GOOD (reviews, opinions, user experiences)
+    - CHOOSE between options (comparisons, alternatives, recommendations)
+    - Get CURRENT information (news, recent releases, pricing)
+    - Research ANY topic (general knowledge, how things work)
+
+    Args:
+        query: What you want to know (be specific for better results)
+
+    Returns:
+        Synthesized answer with source citations
+
+    Examples:
+        - "Is Tavily any good for AI search?" -> Synthesized review with real opinions
+        - "Best chess opening against d4 for aggressive play" -> Analysis with sources
+        - "Should I use NextAuth or Clerk for authentication?" -> Comparison with recommendations
+    """
+    if not PERPLEXITY_API_KEY:
+        return "Error: PERPLEXITY_API_KEY not configured"
+
+    try:
+        response = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "sonar",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful research assistant. Provide clear, synthesized answers based on current web information. Include specific details, real user opinions when available, and cite your sources."
+                    },
+                    {
+                        "role": "user",
+                        "content": query
+                    }
+                ]
+            },
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            return f"Error from Perplexity: {response.status_code} - {response.text}"
+
+        result = response.json()
+
+        # Extract the answer
+        answer = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        if not answer:
+            return "No results found. Try rephrasing your query."
+
+        # Extract citations if available
+        citations = result.get("citations", [])
+
+        formatted_response = f"""## Web Search Results
+
+{answer}"""
+
+        if citations:
+            formatted_response += "\n\n---\n### Sources\n"
+            for i, citation in enumerate(citations, 1):
+                formatted_response += f"{i}. {citation}\n"
+
+        return formatted_response
+
+    except requests.Timeout:
+        return "Web search timed out. Please try again."
+    except Exception as e:
+        return f"Error searching web: {str(e)}"
+
 
 # --- TOOL 2: MEMORY (The Second Brain) ---
 
