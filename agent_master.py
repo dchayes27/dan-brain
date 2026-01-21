@@ -2100,65 +2100,6 @@ async def api_process_transcript(request: Request):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-
-async def api_elevenlabs_webhook(request: Request):
-    """
-    Webhook endpoint for ElevenLabs post-call transcription.
-    Transforms ElevenLabs format to dan-brain format and processes.
-
-    Configure in ElevenLabs:
-    - Webhook URL: https://dan-brain-production.up.railway.app/api/webhook/elevenlabs
-    - Type: Post-call transcription
-    """
-    try:
-        body = await request.json()
-
-        # Verify it's a transcription webhook
-        webhook_type = body.get("type", "")
-        if webhook_type != "post_call_transcription":
-            print(f"[Webhook] Ignoring non-transcription webhook: {webhook_type}")
-            return JSONResponse({"success": True, "message": "Ignored non-transcription webhook"})
-
-        data = body.get("data", {})
-        agent_id = data.get("agent_id", "Unknown")
-        conversation_id = data.get("conversation_id", "")
-        transcript_entries = data.get("transcript", [])
-
-        # Extract agent name from analysis or use agent_id
-        analysis = data.get("analysis", {})
-        agent_name = analysis.get("agent_name", agent_id)
-
-        # Convert transcript array to text format
-        transcript_lines = []
-        for entry in transcript_entries:
-            role = entry.get("role", "unknown").capitalize()
-            message = entry.get("message", "")
-            if message:
-                transcript_lines.append(f"{role}: {message}")
-
-        transcript_text = "\n".join(transcript_lines)
-
-        if not transcript_text or len(transcript_text.strip()) < 20:
-            print(f"[Webhook] Transcript too short, skipping: {conversation_id}")
-            return JSONResponse({"success": True, "message": "Transcript too short"})
-
-        print(f"[Webhook] Processing ElevenLabs transcript: {conversation_id} ({len(transcript_entries)} turns)")
-
-        # Process using existing function
-        result = process_transcript(transcript_text, agent_name)
-
-        print(f"[Webhook] Successfully processed: {conversation_id}")
-        return JSONResponse({
-            "success": True,
-            "conversation_id": conversation_id,
-            "message": "Transcript processed"
-        })
-
-    except Exception as e:
-        print(f"[Webhook] Error processing ElevenLabs webhook: {e}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-
 async def api_get_rest_of_day(request: Request):
     """REST endpoint for iOS app to get unified rest-of-day view."""
     try:
@@ -2526,7 +2467,6 @@ if __name__ == "__main__":
 
     # Add REST API routes to the MCP app for iOS
     mcp_app.routes.insert(0, Route("/api/process-transcript", api_process_transcript, methods=["POST"]))
-    mcp_app.routes.insert(0, Route("/api/webhook/elevenlabs", api_elevenlabs_webhook, methods=["POST"]))
     mcp_app.routes.insert(0, Route("/api/rest-of-day", api_get_rest_of_day, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/rest-of-day/structured", api_get_rest_of_day_structured, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/health", api_health, methods=["GET"]))
