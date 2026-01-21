@@ -1548,12 +1548,17 @@ def process_transcript(transcript: str, agent_name: str = "Agent") -> str:
 
         # Also archive transcript for pattern detection
         transcript_archive = []
+        print(f"[Archive] Checking for existing archive at: {TRANSCRIPT_ARCHIVE_FILE}")
         if os.path.exists(TRANSCRIPT_ARCHIVE_FILE):
             with open(TRANSCRIPT_ARCHIVE_FILE, 'r') as f:
                 try:
                     transcript_archive = json.load(f)
+                    print(f"[Archive] Loaded {len(transcript_archive)} existing transcripts")
                 except:
                     transcript_archive = []
+                    print("[Archive] Failed to parse existing archive, starting fresh")
+        else:
+            print("[Archive] No existing archive found, creating new")
 
         transcript_archive.append({
             "timestamp": timestamp,
@@ -1565,8 +1570,12 @@ def process_transcript(transcript: str, agent_name: str = "Agent") -> str:
         # Keep last 20 transcripts for pattern analysis
         transcript_archive = transcript_archive[-20:]
 
-        with open(TRANSCRIPT_ARCHIVE_FILE, 'w') as f:
-            json.dump(transcript_archive, f, indent=2)
+        try:
+            with open(TRANSCRIPT_ARCHIVE_FILE, 'w') as f:
+                json.dump(transcript_archive, f, indent=2)
+            print(f"[Archive] Successfully saved {len(transcript_archive)} transcripts to {TRANSCRIPT_ARCHIVE_FILE}")
+        except Exception as archive_error:
+            print(f"[Archive] ERROR writing archive: {archive_error}")
 
         # Store summary based on conversation type
         if is_brainstorm:
