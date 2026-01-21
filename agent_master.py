@@ -1722,6 +1722,42 @@ def get_previous_conversation() -> str:
 
 
 @mcp.tool()
+def debug_data_files() -> str:
+    """
+    DEBUG: Show what data files exist and their sizes.
+    Use this to diagnose issues with transcript archiving.
+    """
+    output = [f"DATA_DIR: {DATA_DIR}"]
+
+    files_to_check = [
+        ("transcript_archive.json", TRANSCRIPT_ARCHIVE_FILE),
+        ("last_conversation.json", LAST_CONVERSATION_FILE),
+        ("last_brainstorm.json", LAST_BRAINSTORM_FILE),
+        ("recent_actions.json", RECENT_ACTIONS_FILE),
+        ("knowledge_graph.json", MEMORY_FILE),
+    ]
+
+    for name, path in files_to_check:
+        if os.path.exists(path):
+            size = os.path.getsize(path)
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        output.append(f"✅ {name}: {size} bytes, {len(data)} items")
+                    elif isinstance(data, dict):
+                        output.append(f"✅ {name}: {size} bytes, {len(data)} keys")
+                    else:
+                        output.append(f"✅ {name}: {size} bytes")
+            except:
+                output.append(f"⚠️ {name}: {size} bytes (parse error)")
+        else:
+            output.append(f"❌ {name}: NOT FOUND")
+
+    return "\n".join(output)
+
+
+@mcp.tool()
 def detect_patterns(min_transcripts: int = 5) -> str:
     """
     Analyze conversation history to discover what ACTUALLY works with Dan.
