@@ -2224,6 +2224,24 @@ async def api_health(request: Request):
     return JSONResponse({"status": "ok", "service": "dan-brain"})
 
 
+async def api_debug_memory_graph(request: Request):
+    """Debug endpoint to check memory graph status."""
+    if not os.path.exists(MEMORY_FILE):
+        return JSONResponse({"exists": False, "path": MEMORY_FILE, "message": "Memory file not found"})
+
+    try:
+        with open(MEMORY_FILE, 'r') as f:
+            data = json.load(f)
+        return JSONResponse({
+            "exists": True,
+            "path": MEMORY_FILE,
+            "count": len(data) if isinstance(data, list) else 0,
+            "sample": data[:3] if isinstance(data, list) and len(data) > 0 else []
+        })
+    except Exception as e:
+        return JSONResponse({"exists": True, "path": MEMORY_FILE, "error": str(e)})
+
+
 async def api_get_last_conversation(request: Request):
     """Debug endpoint to check last conversation context."""
     if not os.path.exists(LAST_CONVERSATION_FILE):
@@ -2488,6 +2506,7 @@ if __name__ == "__main__":
     mcp_app.routes.insert(0, Route("/api/health", api_health, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/last-conversation", api_get_last_conversation, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/last-brainstorm", api_get_last_brainstorm, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/debug/memory-graph", api_debug_memory_graph, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/knowledge-base", api_get_knowledge_base, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/knowledge-base/star", api_star_knowledge_item, methods=["POST"]))
 
