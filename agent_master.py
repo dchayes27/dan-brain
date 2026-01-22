@@ -36,13 +36,31 @@ def restore_google_token():
 
 restore_google_token()
 
-# Restore knowledge graph from environment variable if file doesn't exist
+# Restore knowledge graph from environment variable if file doesn't exist or is empty
 def restore_knowledge_graph():
     kg_b64 = os.environ.get("KNOWLEDGE_GRAPH_BASE64")
     data_dir = os.environ.get("DATA_DIR", "/app/data")
     kg_path = f"{data_dir}/knowledge_graph.json"
 
-    if kg_b64 and not os.path.exists(kg_path):
+    # Check if file exists and has valid content
+    needs_restore = False
+    if not os.path.exists(kg_path):
+        needs_restore = True
+        print(f"[Startup] Knowledge graph not found at {kg_path}")
+    else:
+        try:
+            with open(kg_path, 'r') as f:
+                data = json.load(f)
+                if not data or len(data) == 0:
+                    needs_restore = True
+                    print(f"[Startup] Knowledge graph is empty at {kg_path}")
+                else:
+                    print(f"[Startup] Knowledge graph exists with {len(data)} entries")
+        except:
+            needs_restore = True
+            print(f"[Startup] Knowledge graph is invalid at {kg_path}")
+
+    if kg_b64 and needs_restore:
         try:
             os.makedirs(data_dir, exist_ok=True)
             with open(kg_path, 'w') as f:
@@ -50,8 +68,6 @@ def restore_knowledge_graph():
             print(f"[Startup] Restored knowledge graph to {kg_path}")
         except Exception as e:
             print(f"[Startup] Failed to restore knowledge graph: {e}")
-    elif os.path.exists(kg_path):
-        print(f"[Startup] Knowledge graph already exists at {kg_path}")
 
 restore_knowledge_graph()
 
